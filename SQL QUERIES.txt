@@ -1,0 +1,245 @@
+create database order_management_system;
+use order_management_system;
+
+CREATE TABLE customer (
+    customer_id int primary key auto_increment,
+    username VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    phone_number VARCHAR(15) UNIQUE,
+    address VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE product (
+    product_id int primary key auto_increment,
+    product_name VARCHAR(100) NOT NULL,
+    category ENUM('electronics', 'clothing') NOT NULL,
+    price float NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE inventory (
+    inventory_id INT PRIMARY KEY AUTO_INCREMENT,
+    product_id INT,
+    stock_quantity INT NOT NULL DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES Product(product_id) ON DELETE CASCADE
+);
+desc inventory;
+CREATE TABLE orders (
+    order_id INT PRIMARY KEY AUTO_INCREMENT,
+    customer_id INT,
+    product_id INT,
+    quantity INT NOT NULL,
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_amount float NOT NULL,
+    status ENUM('pending', 'completed', 'cancelled') NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES Customer(customer_id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES Product(product_id) ON DELETE CASCADE
+);
+
+CREATE TABLE admin (
+    admin_id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- Adding indexes for optimization
+CREATE INDEX idx_customer_id ON orders(customer_id);
+CREATE INDEX idx_product_id ON orders(product_id);
+CREATE INDEX idx_order_id ON orders(order_id);
+
+-- A view contains rows and columns, just like a real table. The fields in a view are fields from one or more real tables in the database.
+CREATE VIEW pending_orders AS
+SELECT order_id, customer_id, product_id, quantity, order_date, total_amount, status
+FROM orders
+WHERE status = 'pending';
+
+CREATE VIEW stock_levels AS
+SELECT p.product_id, p.product_name, i.stock_quantity
+FROM product p
+JOIN inventory i ON p.product_id = i.product_id;
+
+-- This trigger reduces the stock_quantity in the inventory table when a new order is added.
+
+DELIMITER //
+CREATE TRIGGER after_order_insert
+AFTER INSERT ON orders
+FOR EACH ROW
+BEGIN
+    DECLARE current_stock INT;
+    
+    -- Retrieve current stock for the ordered product
+    SELECT stock_quantity INTO current_stock
+    FROM inventory
+    WHERE product_id = NEW.product_id;
+    
+    -- Check if sufficient stock is available
+    IF current_stock < NEW.quantity THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient stock for the product';
+    ELSE
+        -- Deduct the ordered quantity from inventory
+        UPDATE inventory
+        SET stock_quantity = stock_quantity - NEW.quantity
+        WHERE product_id = NEW.product_id;
+    END IF;
+END;
+//
+DELIMITER ;
+
+
+-- This trigger restores the stock if an order is deleted.
+
+DELIMITER //
+CREATE TRIGGER after_order_delete
+AFTER DELETE ON orders
+FOR EACH ROW
+BEGIN
+    -- Add the quantity back to inventory for the deleted order
+    UPDATE inventory
+    SET stock_quantity = stock_quantity + OLD.quantity
+    WHERE product_id = OLD.product_id;
+END;
+//
+DELIMITER ;
+
+
+-- Stored Procedure
+-- This procedure will place an order, calculate the total amount, and deduct stock.
+
+DELIMITER //
+CREATE PROCEDURE place_order(
+    IN customerId INT,
+    IN productId INT,
+    IN quantity INT,
+    OUT orderId INT
+)
+BEGIN
+    DECLARE current_stock INT;
+    DECLARE price float;
+    DECLARE total_amount float;
+
+    -- Start a transaction
+    START TRANSACTION;
+
+    -- Check stock availability
+    SELECT stock_quantity INTO current_stock
+    FROM inventory
+    WHERE product_id = productId;
+
+    IF current_stock < quantity THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient stock for this product';
+    ELSE
+        -- Retrieve product price and calculate total amount
+        SELECT price INTO price
+        FROM product
+        WHERE product_id = productId;
+        SET total_amount = price * quantity;
+
+        -- Insert new order
+        INSERT INTO orders (customer_id, product_id, quantity, total_amount, status)
+        VALUES (customerId, productId, quantity, total_amount, 'pending');
+
+        -- Retrieve the generated order ID
+        SET orderId = LAST_INSERT_ID();
+
+        -- Update inventory
+        UPDATE inventory
+        SET stock_quantity = stock_quantity - quantity
+        WHERE product_id = productId;
+
+        -- Commit transaction
+        COMMIT;
+    END IF;
+END;
+//
+DELIMITER ;
+
+-- This procedure allows an admin to update the stock level for a specific product.
+
+DELIMITER //
+CREATE PROCEDURE UpdateStock(
+    IN productId INT,
+    IN newStock INT
+)
+BEGIN
+    -- Update stock quantity in the inventory
+    UPDATE inventory
+    SET stock_quantity = newStock,
+        last_updated = NOW()
+    WHERE product_id = productId;
+END;
+//
+DELIMITER ;
+
+insert into customer(username,email,phone_number,address,password) values("Geethapriyan","geethu@gamil.com","9003594374","coimbatore","Geethu@1234");
+select * from customer;
+ALTER TABLE customer
+ADD password varchar(200) unique not null;
+delete from customer where customer_id=1;
+insert into admin(username,password,email)values("geethu","gethu@1234","geethu23@gmail.com");
+select * from admin;
+
+INSERT INTO product (product_name, category, price) VALUES
+('Smartphone', 'electronics', 699.99),
+('Laptop', 'electronics', 1199.99),
+('Headphones', 'electronics', 199.99),
+('Smartwatch', 'electronics', 249.99),
+('4K Television', 'electronics', 899.99),
+('T-Shirt', 'clothing', 19.99),
+('Jeans', 'clothing', 49.99),
+('Jacket', 'clothing', 89.99),
+('Sneakers', 'clothing', 69.99),
+('Hat', 'clothing', 15.99);
+
+select * from product;
+
+INSERT INTO inventory (product_id, stock_quantity) VALUES
+(1, 50),   -- Smartphone
+(2, 30),   -- Laptop
+(3, 100),  -- Headphones
+(4, 75),   -- Smartwatch
+(5, 40),   -- 4K Television
+(6, 200),  -- T-Shirt
+(7, 150),  -- Jeans
+(8, 60),   -- Jacket
+(9, 120),  -- Sneakers
+(10, 80);  -- Hat
+
+
+select * from inventory;
+
+
+-- Order 1: Smartphone (product_id = 1), quantity = 2
+INSERT INTO orders (customer_id, product_id, quantity, total_amount, status)
+VALUES (1, 1, 2, 1399.98, 'pending');
+
+-- Order 2: T-Shirt (product_id = 6), quantity = 5
+INSERT INTO orders (customer_id, product_id, quantity, total_amount, status)
+VALUES (1, 6, 5, 99.95, 'pending');
+
+select * from orders;
+show tables;
+
+select * from stock_levels;
+
+select * from pending_orders;
+
+select * from customer;
+
+select * from admin;
+
+SELECT * FROM orders;
+select * from product;
+select * from customer;
+
+delete from customer where customer_id=2;
+
+select * from product;
+
+select * from inventory;
+select p.product_id,p.product_name,p.price,i.stock_quantity from product as p inner join inventory as i on p.product_id=i.product_id;
+
